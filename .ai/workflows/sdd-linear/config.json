@@ -1,0 +1,47 @@
+{
+  "version": "1.0.0",
+  "linear": {
+    "required": true,
+    "featureEntity": "project"
+  },
+  "statusSync": {
+    "mappingFile": "state-map.json",
+    "onUnmappedState": "error"
+  },
+  "metadata": {
+    "root": "changes",
+    "filePattern": "{change}.json"
+  },
+  "derivedIssue": {
+    "engramFirst": true,
+    "retry": {
+      "maxAttempts": 3,
+      "backoff": "none"
+    },
+    "manualFallbackTemplate": "templates/manual-derived-issue.md",
+    "schema": "contracts/derived-issue.schema.json"
+  },
+  "archive": {
+    "requiredEvidence": [
+      "prUrl",
+      "mergeConfirmed",
+      "qaNotes",
+      "businessValidation"
+    ],
+    "gatePolicy": "block-on-missing-evidence",
+    "remoteRevalidation": {
+      "mode": "disabled",
+      "reason": "fase-1-local-evidence-is-canonical"
+    },
+    "commentTemplate": "templates/archive-comment.md",
+    "commentOnPass": true,
+    "closeIssueOnPass": true,
+    "blockCommentOnFailure": true,
+    "blockCloseOnFailure": true
+  },
+  "adapter": {
+    "packaging": "commands-only",
+    "optionalHelperSkill": "sdd-linear-flow",
+    "helperRequired": false
+  }
+}

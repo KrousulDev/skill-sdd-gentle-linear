@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://skill-sdd-gentle-linear.local/sdd-linear/contracts/change-metadata.schema.json",
+  "title": "SDD Linear Change Metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "changeId",
+    "linear",
+    "workflow",
+    "archive",
+    "derivedIssues",
+    "unresolved"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "changeId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "title": {
+      "type": "string"
+    },
+    "type": {
+      "type": "string"
+    },
+    "linear": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "issueId"
+      ],
+      "properties": {
+        "issueId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "featureId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "originIssueId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sddState",
+        "mappedLinearState"
+      ],
+      "properties": {
+        "sddState": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mappedLinearState": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "archive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence",
+        "gate",
+        "comment"
+      ],
+      "properties": {
+        "evidence": {
+          "$ref": "./archive-evidence.schema.json#/$defs/partialEvidence"
+        },
+        "gate": {
+          "$ref": "./archive-evidence.schema.json#/$defs/gateEvaluation"
+        },
+        "comment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "template",
+            "body",
+            "renderedAt",
+            "commentAllowed",
+            "closeAllowed"
+          ],
+          "properties": {
+            "template": {
+              "type": "string",
+              "minLength": 1
+            },
+            "body": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "renderedAt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "commentAllowed": {
+              "type": "boolean"
+            },
+            "closeAllowed": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "derivedIssues": {
+      "type": "array",
+      "items": {
+        "$ref": "./derived-issue.schema.json"
+      }
+    },
+    "unresolved": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "topic",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "topic": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "minLength": 1
+          },
+          "decisionNeededBy": {
+            "type": "string"
+          },
+          "fallback": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

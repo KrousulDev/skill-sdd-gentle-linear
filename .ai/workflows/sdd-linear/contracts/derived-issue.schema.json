@@ -1,0 +1,231 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://skill-sdd-gentle-linear.local/sdd-linear/contracts/derived-issue.schema.json",
+  "title": "Derived Issue",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "title",
+    "summary",
+    "blocking",
+    "originChangeId",
+    "originLinearIssueId",
+    "engramObservationId",
+    "retry",
+    "status",
+    "manualFallback"
+  ],
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "impact": {
+      "type": "string"
+    },
+    "blocking": {
+      "type": "boolean"
+    },
+    "originChangeId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "originLinearIssueId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "originLinearFeatureId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "linearIssueId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "engramObservationId": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "retry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempted",
+        "max"
+      ],
+      "properties": {
+        "attempted": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "max": {
+          "type": "integer",
+          "const": 3
+        }
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "logged",
+        "synced",
+        "manual-pending"
+      ]
+    },
+    "manualFallback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required",
+        "fieldOrder",
+        "payload",
+        "prompt"
+      ],
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "fieldOrder": {
+          "type": "array",
+          "const": [
+            "parentLinearIssueId",
+            "parentLinearFeatureId",
+            "title",
+            "summary",
+            "impact",
+            "blocking",
+            "proposedLinearState",
+            "sourceChangeId",
+            "engramObservationId",
+            "evidenceLinks",
+            "operatorNotes"
+          ]
+        },
+        "payload": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "parentLinearIssueId",
+            "title",
+            "summary",
+            "impact",
+            "blocking",
+            "proposedLinearState",
+            "sourceChangeId",
+            "engramObservationId",
+            "evidenceLinks",
+            "operatorNotes"
+          ],
+          "properties": {
+            "parentLinearIssueId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "parentLinearFeatureId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1
+            },
+            "impact": {
+              "type": "string",
+              "minLength": 1
+            },
+            "blocking": {
+              "type": "boolean"
+            },
+            "proposedLinearState": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sourceChangeId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "engramObservationId": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "evidenceLinks": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "operatorNotes": {
+              "type": "string"
+            }
+          }
+        },
+        "prompt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "required": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "type": "object"
+              },
+              "prompt": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "required": {
+                "const": false
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "type": "null"
+              },
+              "prompt": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

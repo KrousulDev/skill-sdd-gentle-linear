@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://skill-sdd-gentle-linear.local/sdd-linear/contracts/archive-evidence.schema.json",
+  "title": "Archive Evidence",
+  "type": "object",
+  "$defs": {
+    "partialEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "prUrl",
+        "mergeConfirmed",
+        "qaNotes",
+        "businessValidation"
+      ],
+      "properties": {
+        "prUrl": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uri"
+        },
+        "mergeConfirmed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "qaNotes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "businessValidation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "prUrl",
+        "mergeConfirmed",
+        "qaNotes",
+        "businessValidation"
+      ],
+      "properties": {
+        "prUrl": {
+          "type": "string",
+          "minLength": 1,
+          "format": "uri"
+        },
+        "mergeConfirmed": {
+          "type": "boolean"
+        },
+        "qaNotes": {
+          "type": "string",
+          "minLength": 1
+        },
+        "businessValidation": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "gateEvaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "missing",
+        "evaluatedAt",
+        "remoteRevalidationMode"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "blocked",
+            "pass"
+          ]
+        },
+        "missing": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "prUrl",
+              "mergeConfirmed",
+              "qaNotes",
+              "businessValidation"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "evaluatedAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "remoteRevalidationMode": {
+          "type": "string",
+          "enum": [
+            "disabled"
+          ]
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "$ref": "#/$defs/evidence"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "version": "1.0.0",
+  "linearStates": [
+    "Backlog",
+    "In Progress",
+    "Done"
+  ],
+  "onUnmappedState": "error",
+  "mapping": {
+    "draft": "Backlog",
+    "exploration": "Backlog",
+    "proposal": "Backlog",
+    "spec": "Backlog",
+    "design": "Backlog",
+    "tasks": "Backlog",
+    "apply": "In Progress",
+    "implementing": "In Progress",
+    "review": "In Progress",
+    "verify": "In Progress",
+    "qa_pending": "In Progress",
+    "business_validation_pending": "In Progress",
+    "ready_to_archive": "In Progress",
+    "archived": "Done"
+  }
+}
