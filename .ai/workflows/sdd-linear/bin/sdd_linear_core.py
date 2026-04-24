@@ -307,7 +307,7 @@ class WorkflowCore:
     ) -> dict:
         remaining_attempts = max_attempts - attempted
         return {
-            "reconciliationRequired": True,
+            "reconciliationRequired": False,
             "canonicalRecord": {
                 "system": "engram",
                 "observationId": engram_observation_id,

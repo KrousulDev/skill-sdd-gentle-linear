@@ -23,7 +23,7 @@ This skill is OPTIONAL. If this file is missing, `/sdd-new`, `/sdd-status`, `/sd
 5. If Engram save is required for `/sdd-log-issue`, ensure the observation is saved before running the neutral core command.
 6. If `/sdd-archive` is blocked, explain which evidence fields are missing and stop there.
 7. Treat live mode as optional and operator-confirmed only: require the exact phrase `ALLOW_SDD_LINEAR_LIVE` before forwarding `--runtime-mode live`.
-8. Surface core JSON, reconciliation guidance, preflight failures, and manual fallback prompts unchanged.
+8. Surface core JSON, retry/reconciliation guidance, preflight failures, and manual fallback prompts unchanged.
 
 ## Command guidance
 
@@ -63,7 +63,7 @@ python3 ./.ai/workflows/sdd-linear/bin/sdd_linear_core.py log-issue ...
 ```
 
 - If the core returns `manual-pending`, present the generated payload and prompt exactly as returned.
-- If the core returns reconciliation guidance for partial success, present it exactly as returned.
+- If the core returns retry guidance for partial success, present it exactly as returned.
 
 ### /sdd-archive
 

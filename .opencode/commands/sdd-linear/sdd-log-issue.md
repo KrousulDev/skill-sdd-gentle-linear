@@ -50,7 +50,7 @@ python3 ./.ai/workflows/sdd-linear/bin/sdd_linear_core.py log-issue \
 ```
 
 6. Return the JSON emitted by the neutral core unchanged.
-   - If status is `logged` and the core marks reconciliation guidance, surface that guidance exactly so the operator retries Linear without duplicating the Engram record.
+   - If status is `logged` and the core returns retry guidance, surface that guidance exactly so the operator retries Linear without duplicating the Engram record.
    - If status is `manual-pending`, surface the generated fallback payload and prompt without additional adapter logic.
 
 ## Live mode confirmation UX

@@ -353,7 +353,7 @@ class WorkflowCoreBatch4Tests(unittest.TestCase):
         self.assertEqual(result["adapterOutcomes"]["logIssue"][1]["error"]["code"], "REMOTE")
         self.assertTrue(result["adapterOutcomes"]["logIssue"][1]["error"]["retryable"])
         self.assertEqual(metadata["adapterOutcomes"]["logIssue"], result["adapterOutcomes"]["logIssue"])
-        self.assertTrue(result["operatorGuidance"]["reconciliationRequired"])
+        self.assertFalse(result["operatorGuidance"]["reconciliationRequired"])
         self.assertEqual(result["operatorGuidance"]["canonicalRecord"], {"system": "engram", "observationId": 41})
         self.assertEqual(result["operatorGuidance"]["remainingLinearAttempts"], 2)
         self.assertIn("Reuse engramObservationId 41", result["operatorGuidance"]["nextSteps"][0])
@@ -444,7 +444,7 @@ class WorkflowCoreBatch4Tests(unittest.TestCase):
         self.assertIn("Accept optional sync outcome data", command_doc)
         self.assertIn("Return the JSON emitted by the neutral core unchanged", command_doc)
         self.assertIn("ALLOW_SDD_LINEAR_LIVE", command_doc)
-        self.assertIn("reconciliation guidance", command_doc)
+        self.assertIn("retry guidance", command_doc)
 
     def test_archive_pass_renders_comment_and_allows_close(self):
         self.create_change()
