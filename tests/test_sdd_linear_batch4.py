@@ -7,6 +7,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +27,44 @@ def load_core_module():
 
 
 CORE_MODULE = load_core_module()
+
+
+class FailingStatusAdapter:
+    def sync_status(self, **kwargs):
+        raise CORE_MODULE.RuntimeAdapterError("Linear API timeout", code="NETWORK", retryable=True)
+
+    def log_issue(self, **kwargs):
+        raise NotImplementedError
+
+    def archive(self, **kwargs):
+        raise NotImplementedError
+
+
+def archive_live_handler(**kwargs):
+    outcomes = []
+    if kwargs.get("comment_allowed"):
+        outcomes.append(
+            {
+                "system": "linear",
+                "action_type": "comment",
+                "target_id": kwargs.get("linear_issue_id"),
+                "status": "success",
+                "remote_id": kwargs.get("linear_issue_id"),
+                "error_message": "Live comment acknowledged by injected handler.",
+            }
+        )
+    if kwargs.get("close_allowed"):
+        outcomes.append(
+            {
+                "system": "linear",
+                "action_type": "close",
+                "target_id": kwargs.get("linear_issue_id"),
+                "status": "success",
+                "remote_id": kwargs.get("linear_issue_id"),
+                "error_message": "Live close acknowledged by injected handler.",
+            }
+        )
+    return outcomes
 
 
 def load_json(path: Path) -> dict:
@@ -73,6 +112,8 @@ class WorkflowCoreBatch4Tests(unittest.TestCase):
         change_schema = load_json(CORE_ROOT / "contracts/change-metadata.schema.json")
         derived_schema = load_json(CORE_ROOT / "contracts/derived-issue.schema.json")
         archive_schema = load_json(CORE_ROOT / "contracts/archive-evidence.schema.json")
+        runtime_outcome_schema = load_json(CORE_ROOT / "contracts/runtime-outcome.schema.json")
+        runtime_preflight_schema = load_json(CORE_ROOT / "contracts/runtime-preflight.schema.json")
 
         self.assertEqual(
             change_schema["required"],
@@ -82,8 +123,9 @@ class WorkflowCoreBatch4Tests(unittest.TestCase):
         self.assertEqual(derived_schema["properties"]["retry"]["properties"]["max"]["const"], 3)
         self.assertEqual(
             derived_schema["properties"]["status"]["enum"],
-            ["logged", "synced", "manual-pending"],
+            ["logged", "synced", "reconciliation-required", "manual-pending"],
         )
+        self.assertEqual(derived_schema["properties"]["reconciliationRequired"]["type"], "boolean")
         self.assertEqual(
             derived_schema["properties"]["manualFallback"]["properties"]["fieldOrder"]["const"],
             CORE_MODULE.FIELD_ORDER,
@@ -96,6 +138,12 @@ class WorkflowCoreBatch4Tests(unittest.TestCase):
             archive_schema["$defs"]["gateEvaluation"]["properties"]["remoteRevalidationMode"]["enum"],
             ["disabled"],
         )
+        self.assertEqual(change_schema["properties"]["runtime"]["properties"]["mode"]["enum"], ["stub", "live"])
+        self.assertEqual(
+            runtime_outcome_schema["properties"]["error"]["properties"]["code"]["enum"],
+            ["PRECHECK_FAILED", "AUTH", "NETWORK", "VALIDATION", "REMOTE", "UNKNOWN", None],
+        )
+        self.assertEqual(runtime_preflight_schema["properties"]["status"]["enum"], ["pass", "fail"])
 
     def test_state_map_supports_many_to_few_and_unknown_state_errors(self):
         state_map = load_json(CORE_ROOT / "state-map.json")
@@ -120,8 +168,27 @@ class WorkflowCoreBatch4Tests(unittest.TestCase):
         self.assertEqual(metadata["linear"]["issueId"], "LIN-123")
         self.assertEqual(metadata["linear"]["featureId"], "PROJ-7")
         self.assertEqual(metadata["workflow"], {"sddState": "draft", "mappedLinearState": "Backlog"})
+        self.assertEqual(metadata["runtime"], {"mode": "stub", "preflight": None})
+        self.assertEqual(metadata["adapterOutcomes"]["statusSync"], [])
         self.assertEqual(metadata["archive"]["gate"]["status"], "blocked")
         self.assertEqual(metadata["derivedIssues"], [])
+
+    def test_create_change_accepts_explicit_runtime_mode_and_returns_it(self):
+        result = self.core.create_change(
+            make_args(
+                change_id="runtime-explicit",
+                linear_issue_id="LIN-123",
+                linear_feature_id="PROJ-7",
+                title="Runtime Explicit",
+                change_type="change",
+                sdd_state="draft",
+                runtime_mode="live",
+            )
+        )
+        metadata = self.metadata("runtime-explicit")
+
+        self.assertEqual(result["runtime"], {"mode": "live", "preflight": None})
+        self.assertEqual(metadata["runtime"], {"mode": "live", "preflight": None})
 
     def test_create_change_requires_linear_issue_id_and_does_not_create_metadata(self):
         missing_issue_args = make_args(
@@ -147,6 +214,56 @@ class WorkflowCoreBatch4Tests(unittest.TestCase):
 
         self.assertEqual(result["workflow"], {"sddState": "qa_pending", "mappedLinearState": "In Progress"})
         self.assertEqual(metadata["workflow"], result["workflow"])
+        self.assertEqual(result["runtime"]["mode"], "stub")
+        self.assertEqual(metadata["adapterOutcomes"]["statusSync"][0]["requestedAction"]["type"], "update_state")
+        self.assertEqual(metadata["adapterOutcomes"]["statusSync"][0]["observedResult"]["status"], "success")
+
+    def test_status_rejects_unknown_runtime_mode_before_dispatch(self):
+        self.create_change()
+
+        with self.assertRaises(CORE_MODULE.CoreError) as error:
+            self.core.status(make_args(change_id="linear-integration", sdd_state="apply", runtime_mode="chaos"))
+
+        self.assertIn("Unsupported runtime mode 'chaos'", str(error.exception))
+
+    def test_status_records_normalized_failure_outcome_when_adapter_errors(self):
+        self.create_change()
+        self.core.adapter_factories["stub"] = lambda: FailingStatusAdapter()
+
+        result = self.core.status(make_args(change_id="linear-integration", sdd_state="apply", runtime_mode="stub"))
+        metadata = self.metadata()
+
+        self.assertEqual(result["status"], "adapter-error")
+        self.assertTrue(result["retryable"])
+        self.assertEqual(metadata["adapterOutcomes"]["statusSync"][0]["error"]["code"], "NETWORK")
+        self.assertEqual(metadata["adapterOutcomes"]["statusSync"][0]["observedResult"]["status"], "failed")
+
+    def test_status_live_preflight_failure_persists_blocked_outcome_and_diagnostics(self):
+        self.create_change()
+
+        with mock.patch.dict("os.environ", {"LINEAR_API_KEY": "", "ENGRAM_API_KEY": ""}, clear=False):
+            result = self.core.status(make_args(change_id="linear-integration", sdd_state="apply", runtime_mode="live"))
+
+        metadata = self.metadata()
+        self.assertEqual(result["status"], "preflight-failed")
+        self.assertEqual(result["runtime"]["preflight"]["status"], "fail")
+        self.assertFalse(result["runtime"]["preflight"]["allowSideEffects"])
+        self.assertEqual(metadata["adapterOutcomes"]["statusSync"][0]["observedResult"]["status"], "blocked")
+        self.assertEqual(metadata["adapterOutcomes"]["statusSync"][0]["error"]["code"], "PRECHECK_FAILED")
+        self.assertIn("credentials", metadata["adapterOutcomes"]["statusSync"][0]["error"]["message"])
+
+    def test_load_metadata_backfills_runtime_defaults_for_legacy_phase1_files(self):
+        result = self.create_change()
+        legacy_path = self.core.metadata_path(result["changeId"])
+        legacy_metadata = load_json(legacy_path)
+        legacy_metadata.pop("runtime")
+        legacy_metadata.pop("adapterOutcomes")
+        legacy_path.write_text(json.dumps(legacy_metadata, indent=2) + "\n", encoding="utf-8")
+
+        _, loaded = self.core.load_metadata(result["changeId"])
+
+        self.assertEqual(loaded["runtime"], {"mode": "stub", "preflight": None})
+        self.assertEqual(loaded["adapterOutcomes"]["archive"], {"gateResult": None, "outcomes": []})
 
     def test_log_issue_requires_engram_before_persisting_metadata(self):
         self.create_change()
@@ -192,10 +309,54 @@ class WorkflowCoreBatch4Tests(unittest.TestCase):
 
         derived_issue = result["derivedIssue"]
         self.assertEqual(result["status"], "synced")
+        self.assertEqual(result["runtime"]["mode"], "stub")
         self.assertEqual(derived_issue["retry"], {"attempted": 2, "max": 3})
         self.assertEqual(derived_issue["linearIssueId"], "LIN-456")
         self.assertFalse(derived_issue["manualFallback"]["required"])
         self.assertIsNone(derived_issue["manualFallback"]["payload"])
+        self.assertEqual(
+            [outcome["system"] for outcome in result["adapterOutcomes"]["logIssue"]],
+            ["engram", "linear"],
+        )
+        self.assertEqual(result["adapterOutcomes"]["logIssue"][1]["observedResult"]["status"], "success")
+
+    def test_log_issue_records_partial_success_outcomes_when_linear_retry_is_still_needed(self):
+        self.create_change()
+
+        result = self.core.log_issue(
+            make_args(
+                change_id="linear-integration",
+                title="Follow-up bug",
+                summary="Engram is canonical but Linear still needs retry",
+                impact="Medium",
+                blocking=False,
+                engram_observation_id=41,
+                linear_issue_id=None,
+                attempt_error=["Linear create attempt 1 failed"],
+                proposed_linear_state="Backlog",
+                evidence_link=["https://example.com/log"],
+                operator_notes="Retry later.",
+                runtime_mode="stub",
+            )
+        )
+
+        metadata = self.metadata()
+
+        self.assertEqual(result["status"], "logged")
+        self.assertEqual(result["runtime"]["mode"], "stub")
+        self.assertEqual(
+            [outcome["system"] for outcome in result["adapterOutcomes"]["logIssue"]],
+            ["engram", "linear"],
+        )
+        self.assertEqual(result["adapterOutcomes"]["logIssue"][0]["observedResult"]["status"], "success")
+        self.assertEqual(result["adapterOutcomes"]["logIssue"][1]["observedResult"]["status"], "failed")
+        self.assertEqual(result["adapterOutcomes"]["logIssue"][1]["error"]["code"], "REMOTE")
+        self.assertTrue(result["adapterOutcomes"]["logIssue"][1]["error"]["retryable"])
+        self.assertEqual(metadata["adapterOutcomes"]["logIssue"], result["adapterOutcomes"]["logIssue"])
+        self.assertTrue(result["operatorGuidance"]["reconciliationRequired"])
+        self.assertEqual(result["operatorGuidance"]["canonicalRecord"], {"system": "engram", "observationId": 41})
+        self.assertEqual(result["operatorGuidance"]["remainingLinearAttempts"], 2)
+        self.assertIn("Reuse engramObservationId 41", result["operatorGuidance"]["nextSteps"][0])
 
     def test_log_issue_generates_manual_fallback_after_third_failure(self):
         self.create_change()
@@ -231,13 +392,59 @@ class WorkflowCoreBatch4Tests(unittest.TestCase):
         )
         self.assertIn("all 3 Linear creation attempts fail", manual_fallback["prompt"])
         self.assertIn("Manual follow-up", manual_fallback["prompt"])
+        self.assertFalse(result["adapterOutcomes"]["logIssue"][1]["error"]["retryable"])
+
+    def test_log_issue_marks_reconciliation_required_when_linear_succeeds_but_engram_follow_up_fails(self):
+        self.create_change()
+
+        result = self.core.log_issue(
+            make_args(
+                change_id="linear-integration",
+                title="Follow-up bug",
+                summary="Linear exists but Engram linkage still needs repair",
+                impact="Medium",
+                blocking=False,
+                engram_observation_id=41,
+                linear_issue_id="LIN-456",
+                attempt_error=[],
+                proposed_linear_state="Backlog",
+                evidence_link=["https://example.com/log"],
+                operator_notes="Repair Engram linkage only.",
+                runtime_mode="stub",
+                engram_linkage_failed=True,
+                engram_linkage_error="Engram linkage update failed after Linear creation.",
+            )
+        )
+
+        metadata = self.metadata()
+        derived_issue = result["derivedIssue"]
+
+        self.assertEqual(result["status"], "reconciliation-required")
+        self.assertTrue(derived_issue["reconciliationRequired"])
+        self.assertEqual(derived_issue["linearIssueId"], "LIN-456")
+        self.assertEqual(derived_issue["engramObservationId"], 41)
+        self.assertEqual(
+            [outcome["system"] for outcome in result["adapterOutcomes"]["logIssue"]],
+            ["engram", "linear"],
+        )
+        self.assertEqual(result["adapterOutcomes"]["logIssue"][0]["observedResult"]["status"], "failed")
+        self.assertEqual(result["adapterOutcomes"]["logIssue"][0]["error"]["code"], "REMOTE")
+        self.assertEqual(result["adapterOutcomes"]["logIssue"][0]["observedResult"]["remoteId"], "41")
+        self.assertEqual(result["adapterOutcomes"]["logIssue"][1]["observedResult"]["status"], "success")
+        self.assertEqual(metadata["adapterOutcomes"]["logIssue"], result["adapterOutcomes"]["logIssue"])
+        self.assertEqual(metadata["derivedIssues"][-1]["status"], "reconciliation-required")
+        self.assertTrue(result["operatorGuidance"]["reconciliationRequired"])
+        self.assertEqual(result["operatorGuidance"]["linkedLinearIssueId"], "LIN-456")
+        self.assertIn("Do NOT create another Linear issue", result["operatorGuidance"]["nextSteps"][1])
 
     def test_log_issue_contract_documents_caller_owned_sync_boundary(self):
         command_doc = (COMMAND_DIR / "sdd-log-issue.md").read_text(encoding="utf-8")
 
         self.assertIn("Save the finding to Engram first and capture `engramObservationId`", command_doc)
         self.assertIn("Accept optional sync outcome data", command_doc)
-        self.assertIn("Return the JSON emitted by the neutral core", command_doc)
+        self.assertIn("Return the JSON emitted by the neutral core unchanged", command_doc)
+        self.assertIn("ALLOW_SDD_LINEAR_LIVE", command_doc)
+        self.assertIn("reconciliation guidance", command_doc)
 
     def test_archive_pass_renders_comment_and_allows_close(self):
         self.create_change()
@@ -256,11 +463,20 @@ class WorkflowCoreBatch4Tests(unittest.TestCase):
 
         archive = result["archive"]
         self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["runtime"]["mode"], "stub")
         self.assertEqual(archive["gate"]["missing"], [])
         self.assertTrue(archive["comment"]["commentAllowed"])
         self.assertTrue(archive["comment"]["closeAllowed"])
         self.assertIn("https://github.com/example/repo/pull/1", archive["comment"]["body"])
         self.assertIn("Ready to close.", archive["comment"]["body"])
+        self.assertEqual(result["adapterOutcomes"]["archive"]["gateResult"], "pass")
+        self.assertEqual(
+            [outcome["requestedAction"]["type"] for outcome in result["adapterOutcomes"]["archive"]["outcomes"]],
+            ["comment", "close"],
+        )
+        self.assertTrue(
+            all(outcome["observedResult"]["status"] == "success" for outcome in result["adapterOutcomes"]["archive"]["outcomes"])
+        )
 
     def test_archive_missing_evidence_blocks_comment_and_close(self):
         self.create_change()
@@ -283,6 +499,48 @@ class WorkflowCoreBatch4Tests(unittest.TestCase):
         self.assertFalse(archive["comment"]["commentAllowed"])
         self.assertFalse(archive["comment"]["closeAllowed"])
         self.assertIsNone(archive["comment"]["body"])
+        self.assertEqual(result["adapterOutcomes"]["archive"]["gateResult"], "blocked")
+        self.assertEqual(len(result["adapterOutcomes"]["archive"]["outcomes"]), 1)
+        self.assertEqual(result["adapterOutcomes"]["archive"]["outcomes"][0]["observedResult"]["status"], "blocked")
+        self.assertEqual(result["adapterOutcomes"]["archive"]["outcomes"][0]["error"]["code"], "PRECHECK_FAILED")
+
+    def test_archive_live_mode_blocks_close_via_smoke_policy_but_keeps_comment_path(self):
+        self.create_change()
+        self.core.adapter_factories["live"] = lambda: CORE_MODULE.build_live_runtime_adapter(
+            handlers={"archive": archive_live_handler}
+        )
+
+        with mock.patch.dict(
+            "os.environ",
+            {"LINEAR_API_KEY": "linear-token", "ENGRAM_API_KEY": "engram-token"},
+            clear=False,
+        ):
+            result = self.core.archive(
+                make_args(
+                    change_id="linear-integration",
+                    pr_url="https://github.com/example/repo/pull/1",
+                    merge_confirmed=True,
+                    qa_notes="QA sign-off captured.",
+                    business_validation="PM approved release.",
+                    archive_summary="Ready to close.",
+                    follow_up_notes="Keep comment only in live smoke mode.",
+                    runtime_mode="live",
+                )
+            )
+
+        metadata = self.metadata()
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["runtime"]["preflight"]["status"], "pass")
+        self.assertTrue(result["archive"]["comment"]["commentAllowed"])
+        self.assertFalse(result["archive"]["comment"]["closeAllowed"])
+        self.assertEqual(
+            [outcome["requestedAction"]["type"] for outcome in result["adapterOutcomes"]["archive"]["outcomes"]],
+            ["comment", "close"],
+        )
+        self.assertEqual(result["adapterOutcomes"]["archive"]["outcomes"][0]["observedResult"]["status"], "success")
+        self.assertEqual(result["adapterOutcomes"]["archive"]["outcomes"][1]["observedResult"]["status"], "blocked")
+        self.assertEqual(result["adapterOutcomes"]["archive"]["outcomes"][1]["error"]["code"], "PRECHECK_FAILED")
+        self.assertEqual(metadata["adapterOutcomes"]["archive"], result["adapterOutcomes"]["archive"])
 
     def test_archive_contract_documents_render_only_boundary(self):
         command_doc = (COMMAND_DIR / "sdd-archive.md").read_text(encoding="utf-8")
@@ -302,6 +560,13 @@ class AdapterAndBootstrapContractTests(unittest.TestCase):
             self.assertIn("continue", content)
             self.assertIn("reduced assistance", content)
 
+    def test_command_wrappers_document_runtime_passthrough_and_live_confirmation(self):
+        for path in sorted(COMMAND_DIR.glob("*.md")):
+            content = path.read_text(encoding="utf-8")
+            self.assertIn("runtimeMode", content)
+            self.assertIn("--runtime-mode \"<stub|live>\"", content)
+            self.assertIn("ALLOW_SDD_LINEAR_LIVE", content)
+
     def test_helper_skill_declares_optional_non_blocking_behavior(self):
         content = HELPER_SKILL.read_text(encoding="utf-8")
 
@@ -309,6 +574,8 @@ class AdapterAndBootstrapContractTests(unittest.TestCase):
         self.assertIn("MUST still work through the neutral core", content)
         self.assertIn("Never redefine workflow rules", content)
         self.assertIn("Save to Engram first", content)
+        self.assertIn("ALLOW_SDD_LINEAR_LIVE", content)
+        self.assertIn("reconciliation guidance", content)
 
     def test_bootstrap_first_run_and_rerun_are_idempotent(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -332,16 +599,17 @@ class AdapterAndBootstrapContractTests(unittest.TestCase):
             first_output = first.stdout
             second_output = second.stdout
 
-            self.assertRegex(first_output, r"created:\s+14")
+            self.assertRegex(first_output, r"created:\s+22")
             self.assertRegex(first_output, r"updated:\s+0")
             self.assertRegex(first_output, r"skipped:\s+0")
             self.assertIn("Configure Linear and Engram credentials outside the repo", first_output)
             self.assertTrue((target / ".ai/workflows/sdd-linear/bin/sdd_linear_core.py").exists())
             self.assertTrue((target / ".atl/skills/sdd-linear-flow/SKILL.md").exists())
+            self.assertTrue((target / ".ai/workflows/sdd-linear/runtime/adapters/live.py").exists())
 
             self.assertRegex(second_output, r"created:\s+0")
             self.assertRegex(second_output, r"updated:\s+0")
-            self.assertRegex(second_output, r"skipped:\s+14")
+            self.assertRegex(second_output, r"skipped:\s+22")
             self.assertIn("SDD Linear bootstrap summary", second_output)
 
 

@@ -15,15 +15,25 @@ Commands-only packaging is the Fase 1 baseline. This command MUST resolve status
    - If absent, continue and report reduced assistance only.
 2. Require `changeId`.
 3. Accept optional `sddState` override.
-4. Invoke the neutral core:
+4. Accept optional runtime controls:
+   - `runtimeMode` (`stub` default)
+   - `liveConfirmation` (required phrase: `ALLOW_SDD_LINEAR_LIVE` when `runtimeMode=live`)
+5. Invoke the neutral core:
 
 ```bash
 python3 ./.ai/workflows/sdd-linear/bin/sdd_linear_core.py status \
   --change-id "<change-id>" \
-  [--sdd-state "<sdd-state>"]
+  [--sdd-state "<sdd-state>"] \
+  [--runtime-mode "<stub|live>"]
 ```
 
-5. Return the JSON emitted by the neutral core as the command result.
+6. Return the JSON emitted by the neutral core as the command result.
+
+## Live mode confirmation UX
+
+- Default to `runtimeMode=stub` when omitted.
+- If the operator requests `live`, require the exact confirmation phrase `ALLOW_SDD_LINEAR_LIVE` before forwarding `--runtime-mode live`.
+- Surface preflight failures and adapter outcomes exactly as returned by the core JSON.
 
 ## Required behavior
 

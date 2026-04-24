@@ -20,5 +20,20 @@ In Fase 1, the system MUST require `prUrl`, `mergeConfirmed`, `qaNotes`, and `bu
 - THEN archive is blocked with explicit missing-field feedback
 - AND no close-eligible action is emitted by the Fase 1 contract
 
+### Requirement: Archive flow MUST gate live side effects using adapter outcomes
+When archive runs in `live` mode, the system MUST record adapter outcomes in metadata and MUST block close/high-risk actions unless evidence gates and smoke-safe policy both pass.
+
+#### Scenario: Live close blocked
+- GIVEN required archive evidence is present but smoke-safe target policy fails
+- WHEN `/sdd-archive` attempts close behavior in live mode
+- THEN close action SHALL be blocked
+- AND metadata stores gate result and blocked adapter outcome
+
+#### Scenario: Live archive comment allowed
+- GIVEN evidence gates pass and smoke-safe policy allows non-destructive action
+- WHEN `/sdd-archive` runs in live mode
+- THEN comment/update side effects MAY execute through adapters
+- AND metadata records observed adapter results for audit
+
 ## Decision Notes (TODO)
 - Confirm whether Fase 1 archive must revalidate remote Linear state before close.

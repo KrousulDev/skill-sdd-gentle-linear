@@ -39,6 +39,25 @@
     "blockCommentOnFailure": true,
     "blockCloseOnFailure": true
   },
+  "runtime": {
+    "mode": "stub",
+    "allowedModes": [
+      "stub",
+      "live"
+    ],
+    "live": {
+      "requireExplicitOptIn": true,
+      "preflight": {
+        "credentials": true,
+        "connectivity": true,
+        "targetScope": true
+      },
+      "smokePolicy": {
+        "allowClose": false,
+        "allowedLinearProjects": []
+      }
+    }
+  },
   "adapter": {
     "packaging": "commands-only",
     "optionalHelperSkill": "sdd-linear-flow",

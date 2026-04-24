@@ -21,12 +21,14 @@ Commands-only packaging is the Fase 1 baseline. This command MUST use neutral co
    - `blocking`
    - `engramObservationId`
 4. Accept optional sync outcome data:
-   - `linearIssueId`
-   - repeated `attemptError`
-   - `impact`
-   - `proposedLinearState`
-   - repeated `evidenceLink`
-   - `operatorNotes`
+    - `linearIssueId`
+    - repeated `attemptError`
+    - `impact`
+    - `proposedLinearState`
+    - repeated `evidenceLink`
+    - `operatorNotes`
+    - `runtimeMode` (`stub` default)
+    - `liveConfirmation` (required phrase: `ALLOW_SDD_LINEAR_LIVE` when `runtimeMode=live`)
 5. Invoke the neutral core:
 
 ```bash
@@ -43,10 +45,19 @@ python3 ./.ai/workflows/sdd-linear/bin/sdd_linear_core.py log-issue \
   [--attempt-error "<attempt-3-error>"] \
   [--proposed-linear-state "<linear-state>"] \
   [--evidence-link "<url>"] \
-  [--operator-notes "<notes>"]
+  [--operator-notes "<notes>"] \
+  [--runtime-mode "<stub|live>"]
 ```
 
-6. Return the JSON emitted by the neutral core. If status is `manual-pending`, surface the generated fallback payload and prompt without additional adapter logic.
+6. Return the JSON emitted by the neutral core unchanged.
+   - If status is `logged` and the core marks reconciliation guidance, surface that guidance exactly so the operator retries Linear without duplicating the Engram record.
+   - If status is `manual-pending`, surface the generated fallback payload and prompt without additional adapter logic.
+
+## Live mode confirmation UX
+
+- Default to `runtimeMode=stub` when omitted.
+- If the operator requests `live`, require the exact confirmation phrase `ALLOW_SDD_LINEAR_LIVE` before forwarding `--runtime-mode live`.
+- Do not reinterpret partial-success or manual-fallback policy; surface the core JSON unchanged.
 
 ## Required behavior
 

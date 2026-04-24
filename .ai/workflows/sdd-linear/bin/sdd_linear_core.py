@@ -11,6 +11,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+WORKFLOW_ROOT = Path(__file__).resolve().parent.parent
+if str(WORKFLOW_ROOT) not in sys.path:
+    sys.path.insert(0, str(WORKFLOW_ROOT))
+
+from runtime.adapters.live import build_live_runtime_adapter
+from runtime.adapters.stub import StubRuntimeAdapter
+from runtime.preflight import evaluate_live_preflight, evaluate_target_scope
+from runtime.ports import RuntimeAdapterError, make_outcome
+
+
 FIELD_ORDER = [
     "parentLinearIssueId",
     "parentLinearFeatureId",
@@ -72,6 +82,10 @@ class WorkflowCore:
         self.root = root
         self.config = load_json(root / "config.json")
         self.state_map = load_json(root / self.config["statusSync"]["mappingFile"])
+        self.adapter_factories = {
+            "stub": lambda: StubRuntimeAdapter(),
+            "live": lambda: build_live_runtime_adapter(),
+        }
 
     def metadata_path(self, change_id: str) -> Path:
         pattern = self.config["metadata"]["filePattern"]
@@ -114,7 +128,132 @@ class WorkflowCore:
         path = self.metadata_path(change_id)
         if not path.exists():
             raise CoreError(f"Change metadata not found for '{change_id}' at {path}")
-        return path, load_json(path)
+        return path, self.ensure_runtime_defaults(load_json(path))
+
+    def default_runtime_mode(self) -> str:
+        return self.config["runtime"]["mode"]
+
+    def resolve_runtime_mode(self, requested_mode: str | None) -> str:
+        mode = requested_mode or self.default_runtime_mode()
+        allowed_modes = self.config["runtime"]["allowedModes"]
+        if mode not in allowed_modes:
+            raise CoreError(f"Unsupported runtime mode '{mode}'. Allowed modes: {', '.join(allowed_modes)}")
+        return mode
+
+    def empty_adapter_outcomes(self) -> dict:
+        return {
+            "statusSync": [],
+            "logIssue": [],
+            "archive": {
+                "gateResult": None,
+                "outcomes": [],
+            },
+        }
+
+    def ensure_runtime_defaults(self, metadata: dict) -> dict:
+        metadata.setdefault(
+            "runtime",
+            {
+                "mode": self.default_runtime_mode(),
+                "preflight": None,
+            },
+        )
+        metadata.setdefault("adapterOutcomes", self.empty_adapter_outcomes())
+        metadata["runtime"].setdefault("mode", self.default_runtime_mode())
+        metadata["runtime"].setdefault("preflight", None)
+        metadata["adapterOutcomes"].setdefault("statusSync", [])
+        metadata["adapterOutcomes"].setdefault("logIssue", [])
+        metadata["adapterOutcomes"].setdefault("archive", {"gateResult": None, "outcomes": []})
+        metadata["adapterOutcomes"]["archive"].setdefault("gateResult", None)
+        metadata["adapterOutcomes"]["archive"].setdefault("outcomes", [])
+        return metadata
+
+    def runtime_adapter(self, mode: str):
+        factory = self.adapter_factories.get(mode)
+        if factory is None:
+            raise CoreError(f"Runtime mode '{mode}' is recognized but not yet implemented in this core batch.")
+        return factory()
+
+    def planned_action(self, *, system: str, action_type: str, target_id: str | None) -> dict:
+        return {
+            "system": system,
+            "action_type": action_type,
+            "target_id": target_id,
+        }
+
+    def blocked_outcomes(self, *, actions: list[dict], message: str) -> list[dict]:
+        return [
+            self.normalize_adapter_failure(
+                system=action["system"],
+                action_type=action["action_type"],
+                target_id=action["target_id"],
+                message=message,
+                code="PRECHECK_FAILED",
+                retryable=False,
+                status="blocked",
+            )
+            for action in actions
+        ]
+
+    def preflight_block_message(self, preflight: dict) -> str:
+        failing_checks = [
+            f"{check['name']}: {check['detail']}"
+            for check in preflight.get("checks", [])
+            if check.get("status") == "fail"
+        ]
+        if not failing_checks:
+            return "Live runtime preflight blocked side effects."
+        return "Live runtime preflight blocked side effects: " + " | ".join(failing_checks)
+
+    def evaluate_live_preflight(self, *, actions: list[dict], metadata: dict) -> dict:
+        return evaluate_live_preflight(
+            runtime_config=self.config["runtime"],
+            actions=actions,
+            linear_issue_id=metadata["linear"].get("issueId"),
+            linear_feature_id=metadata["linear"].get("featureId"),
+        ).to_dict()
+
+    def live_close_scope_check(self, *, metadata: dict) -> dict:
+        return evaluate_target_scope(
+            actions=[self.planned_action(system="linear", action_type="close", target_id=metadata["linear"].get("issueId"))],
+            smoke_policy=self.config["runtime"]["live"]["smokePolicy"],
+            linear_issue_id=metadata["linear"].get("issueId"),
+            linear_feature_id=metadata["linear"].get("featureId"),
+        ).to_dict()
+
+    def normalize_status_failure(self, *, linear_issue_id: str, message: str, code: str, retryable: bool | None) -> dict:
+        return make_outcome(
+            system="linear",
+            action_type="update_state",
+            target_id=linear_issue_id,
+            status="failed",
+            remote_id=None,
+            error_code=code,
+            error_message=message,
+            retryable=retryable,
+        ).to_dict()
+
+    def normalize_adapter_failure(
+        self,
+        *,
+        system: str,
+        action_type: str,
+        target_id: str | None,
+        message: str,
+        code: str,
+        retryable: bool | None,
+        status: str = "failed",
+    ) -> dict:
+        return make_outcome(
+            system=system,
+            action_type=action_type,
+            target_id=target_id,
+            status=status,
+            remote_id=None,
+            error_code=code,
+            error_message=message,
+            retryable=retryable,
+        ).to_dict()
 
     def create_change(self, args: argparse.Namespace) -> dict:
         if not args.linear_issue_id:
@@ -125,6 +264,7 @@ class WorkflowCore:
             raise CoreError(f"Change metadata already exists for '{args.change_id}' at {target}")
 
         sdd_state = args.sdd_state or "draft"
+        runtime_mode = self.resolve_runtime_mode(getattr(args, "runtime_mode", None))
         metadata = {
             "version": self.config["version"],
             "changeId": args.change_id,
@@ -139,6 +279,11 @@ class WorkflowCore:
                 "sddState": sdd_state,
                 "mappedLinearState": self.map_state(sdd_state),
             },
+            "runtime": {
+                "mode": runtime_mode,
+                "preflight": None,
+            },
+            "adapterOutcomes": self.empty_adapter_outcomes(),
             "archive": self.empty_archive(args.change_id),
             "derivedIssues": [],
             "unresolved": [],
@@ -150,30 +295,181 @@ class WorkflowCore:
             "metadataPath": str(target.relative_to(self.root)),
             "workflow": metadata["workflow"],
             "linear": metadata["linear"],
+            "runtime": metadata["runtime"],
+        }
+
+    def reconciliation_guidance(
+        self,
+        *,
+        engram_observation_id: int,
+        attempted: int,
+        max_attempts: int,
+    ) -> dict:
+        remaining_attempts = max_attempts - attempted
+        return {
+            "reconciliationRequired": True,
+            "canonicalRecord": {
+                "system": "engram",
+                "observationId": engram_observation_id,
+            },
+            "remainingLinearAttempts": remaining_attempts,
+            "message": (
+                "Engram is the canonical record for this derived issue. Retry Linear creation "
+                "without creating a duplicate Engram observation."
+            ),
+            "nextSteps": [
+                f"Reuse engramObservationId {engram_observation_id} on the next /sdd-log-issue retry.",
+                "If the retry fails again, append the new error with --attempt-error so the retry budget stays accurate.",
+                "Escalate to the manual fallback only after the final Linear retry is exhausted.",
+            ],
+        }
+
+    def engram_linkage_guidance(
+        self,
+        *,
+        engram_observation_id: int,
+        linear_issue_id: str,
+        error_message: str | None,
+    ) -> dict:
+        return {
+            "reconciliationRequired": True,
+            "canonicalRecord": {
+                "system": "engram",
+                "observationId": engram_observation_id,
+            },
+            "linkedLinearIssueId": linear_issue_id,
+            "message": (
+                "Linear issue creation succeeded, but the Engram follow-up update failed. "
+                "Reconcile the existing Engram observation instead of creating another Linear issue."
+            ),
+            "error": error_message,
+            "nextSteps": [
+                f"Update Engram observation {engram_observation_id} to reference Linear issue {linear_issue_id}.",
+                "Do NOT create another Linear issue during reconciliation.",
+                "Record the linkage fix in the existing derived-issue trail once Engram is updated.",
+            ],
         }
 
     def status(self, args: argparse.Namespace) -> dict:
         path, metadata = self.load_metadata(args.change_id)
         sdd_state = args.sdd_state or metadata["workflow"]["sddState"]
         mapped = self.map_state(sdd_state)
+        runtime_mode = self.resolve_runtime_mode(getattr(args, "runtime_mode", None))
         metadata["workflow"] = {
             "sddState": sdd_state,
             "mappedLinearState": mapped,
         }
+        metadata["runtime"]["mode"] = runtime_mode
+        metadata["runtime"]["preflight"] = None
+        planned_actions = [
+            self.planned_action(system="linear", action_type="update_state", target_id=metadata["linear"]["issueId"])
+        ]
+        if runtime_mode == "live":
+            preflight = self.evaluate_live_preflight(actions=planned_actions, metadata=metadata)
+            metadata["runtime"]["preflight"] = preflight
+            if not preflight["allowSideEffects"]:
+                outcomes = self.blocked_outcomes(
+                    actions=planned_actions,
+                    message=self.preflight_block_message(preflight),
+                )
+                metadata["adapterOutcomes"]["statusSync"] = outcomes
+                save_json(path, metadata)
+                return {
+                    "status": "preflight-failed",
+                    "changeId": args.change_id,
+                    "metadataPath": str(path.relative_to(self.root)),
+                    "workflow": metadata["workflow"],
+                    "linear": metadata["linear"],
+                    "runtime": metadata["runtime"],
+                    "adapterOutcomes": {
+                        "statusSync": metadata["adapterOutcomes"]["statusSync"],
+                    },
+                    "retryable": False,
+                }
+        adapter = self.runtime_adapter(runtime_mode)
+        try:
+            outcomes = [outcome.to_dict() for outcome in adapter.sync_status(
+                change_id=args.change_id,
+                linear_issue_id=metadata["linear"]["issueId"],
+                mapped_linear_state=mapped,
+            )]
+            result_status = "ok"
+            retryable = None
+        except RuntimeAdapterError as error:
+            outcomes = [
+                self.normalize_status_failure(
+                    linear_issue_id=metadata["linear"]["issueId"],
+                    message=str(error),
+                    code=error.code,
+                    retryable=error.retryable,
+                )
+            ]
+            result_status = "adapter-error"
+            retryable = error.retryable
+
+        metadata["adapterOutcomes"]["statusSync"] = outcomes
         save_json(path, metadata)
-        return {
-            "status": "ok",
+        result = {
+            "status": result_status,
             "changeId": args.change_id,
             "metadataPath": str(path.relative_to(self.root)),
             "workflow": metadata["workflow"],
             "linear": metadata["linear"],
+            "runtime": metadata["runtime"],
+            "adapterOutcomes": {
+                "statusSync": metadata["adapterOutcomes"]["statusSync"],
+            },
         }
+        if retryable is not None:
+            result["retryable"] = retryable
+        return result
 
     def log_issue(self, args: argparse.Namespace) -> dict:
         path, metadata = self.load_metadata(args.change_id)
         if args.engram_observation_id <= 0:
             raise CoreError("engramObservationId must be a positive integer. Save to Engram before logging to Linear.")
 
+        engram_linkage_failed = bool(getattr(args, "engram_linkage_failed", False))
+        engram_linkage_error = getattr(args, "engram_linkage_error", None)
+        if engram_linkage_failed and not args.linear_issue_id:
+            raise CoreError(
+                "engramLinkageFailed requires linearIssueId because reconciliation applies only after Linear creation succeeds."
+            )
+
+        runtime_mode = self.resolve_runtime_mode(getattr(args, "runtime_mode", None))
+        metadata["runtime"]["mode"] = runtime_mode
+        metadata["runtime"]["preflight"] = None
+        planned_actions = [
+            self.planned_action(
+                system="engram",
+                action_type="save_observation",
+                target_id=str(args.engram_observation_id),
+            ),
+            self.planned_action(
+                system="linear",
+                action_type="create_issue",
+                target_id=metadata["linear"]["issueId"],
+            ),
+        ]
+        if runtime_mode == "live":
+            preflight = self.evaluate_live_preflight(actions=planned_actions, metadata=metadata)
+            metadata["runtime"]["preflight"] = preflight
+            if not preflight["allowSideEffects"]:
+                metadata["adapterOutcomes"]["logIssue"] = self.blocked_outcomes(
+                    actions=planned_actions,
+                    message=self.preflight_block_message(preflight),
+                )
+                save_json(path, metadata)
+                return {
+                    "status": "preflight-failed",
+                    "changeId": args.change_id,
+                    "metadataPath": str(path.relative_to(self.root)),
+                    "runtime": metadata["runtime"],
+                    "adapterOutcomes": {
+                        "logIssue": metadata["adapterOutcomes"]["logIssue"],
+                    },
+                }
+        adapter = self.runtime_adapter(runtime_mode)
         max_attempts = self.config["derivedIssue"]["retry"]["maxAttempts"]
         failure_count = len(args.attempt_error or [])
         attempted = failure_count + (1 if args.linear_issue_id else 0)
@@ -214,6 +510,44 @@ class WorkflowCore:
                 "prompt": render_template(template, payload),
             }
 
+        if engram_linkage_failed:
+            status = "reconciliation-required"
+
+        try:
+            log_outcomes = [
+                outcome.to_dict()
+                for outcome in adapter.log_issue(
+                    change_id=args.change_id,
+                    title=args.title,
+                    summary=args.summary,
+                    impact=args.impact or "Not provided",
+                    blocking=args.blocking,
+                    engram_observation_id=args.engram_observation_id,
+                    linear_issue_id=args.linear_issue_id,
+                    parent_linear_issue_id=metadata["linear"]["issueId"],
+                    parent_linear_feature_id=metadata["linear"].get("featureId"),
+                    proposed_linear_state=proposed_linear_state,
+                    attempt_errors=args.attempt_error or [],
+                    max_attempts=max_attempts,
+                    evidence_links=args.evidence_link or [],
+                    operator_notes=args.operator_notes,
+                    manual_fallback_required=manual_fallback["required"],
+                    engram_linkage_failed=engram_linkage_failed,
+                    engram_linkage_error=engram_linkage_error,
+                )
+            ]
+        except RuntimeAdapterError as error:
+            log_outcomes = [
+                self.normalize_adapter_failure(
+                    system="linear",
+                    action_type="create_issue",
+                    target_id=metadata["linear"]["issueId"],
+                    message=str(error),
+                    code=error.code,
+                    retryable=error.retryable,
+                )
+            ]
+
         derived_issue = {
             "title": args.title,
             "summary": args.summary,
@@ -224,6 +558,7 @@ class WorkflowCore:
             "originLinearFeatureId": metadata["linear"].get("featureId"),
             "linearIssueId": args.linear_issue_id,
             "engramObservationId": args.engram_observation_id,
+            "reconciliationRequired": engram_linkage_failed,
             "retry": {
                 "attempted": attempted,
                 "max": max_attempts,
@@ -231,17 +566,47 @@ class WorkflowCore:
             "status": status,
             "manualFallback": manual_fallback,
         }
+        metadata["adapterOutcomes"]["logIssue"] = log_outcomes
         metadata.setdefault("derivedIssues", []).append(derived_issue)
         save_json(path, metadata)
         return {
             "status": status,
             "changeId": args.change_id,
             "metadataPath": str(path.relative_to(self.root)),
+            "runtime": metadata["runtime"],
+            "adapterOutcomes": {
+                "logIssue": metadata["adapterOutcomes"]["logIssue"],
+            },
             "derivedIssue": derived_issue,
+            **(
+                {
+                    "operatorGuidance": self.reconciliation_guidance(
+                        engram_observation_id=args.engram_observation_id,
+                        attempted=attempted,
+                        max_attempts=max_attempts,
+                    )
+                }
+                if status == "logged" and not args.linear_issue_id
+                else {}
+            ),
+            **(
+                {
+                    "operatorGuidance": self.engram_linkage_guidance(
+                        engram_observation_id=args.engram_observation_id,
+                        linear_issue_id=args.linear_issue_id,
+                        error_message=engram_linkage_error,
+                    )
+                }
+                if status == "reconciliation-required" and args.linear_issue_id
+                else {}
+            ),
         }
 
     def archive(self, args: argparse.Namespace) -> dict:
         path, metadata = self.load_metadata(args.change_id)
+        runtime_mode = self.resolve_runtime_mode(getattr(args, "runtime_mode", None))
+        metadata["runtime"]["mode"] = runtime_mode
+        metadata["runtime"]["preflight"] = None
         evidence = deepcopy(metadata["archive"]["evidence"])
         overrides = {
             "prUrl": args.pr_url,
@@ -307,16 +672,116 @@ class WorkflowCore:
             comment["commentAllowed"] = not bool(self.config["archive"]["blockCommentOnFailure"])
             comment["closeAllowed"] = not bool(self.config["archive"]["blockCloseOnFailure"])
 
+        blocked_archive_outcomes = []
+        requested_close = bool(comment["closeAllowed"])
+        if runtime_mode == "live" and requested_close:
+            close_scope_check = self.live_close_scope_check(metadata=metadata)
+            if close_scope_check["status"] != "pass":
+                comment["closeAllowed"] = False
+                blocked_archive_outcomes = self.blocked_outcomes(
+                    actions=[
+                        self.planned_action(
+                            system="linear",
+                            action_type="close",
+                            target_id=metadata["linear"]["issueId"],
+                        )
+                    ],
+                    message=close_scope_check["detail"],
+                )
+
         metadata["archive"] = {
             "evidence": evidence,
             "gate": gate,
             "comment": comment,
+        }
+        archive_actions = []
+        if comment["commentAllowed"]:
+            archive_actions.append(
+                self.planned_action(system="linear", action_type="comment", target_id=metadata["linear"]["issueId"])
+            )
+        if comment["closeAllowed"]:
+            archive_actions.append(
+                self.planned_action(system="linear", action_type="close", target_id=metadata["linear"]["issueId"])
+            )
+
+        archive_outcomes = []
+        if runtime_mode == "live" and archive_actions:
+            preflight = self.evaluate_live_preflight(actions=archive_actions, metadata=metadata)
+            metadata["runtime"]["preflight"] = preflight
+            if not preflight["allowSideEffects"]:
+                archive_outcomes = self.blocked_outcomes(
+                    actions=archive_actions,
+                    message=self.preflight_block_message(preflight),
+                )
+            else:
+                adapter = self.runtime_adapter(runtime_mode)
+                try:
+                    archive_outcomes = [
+                        outcome.to_dict()
+                        for outcome in adapter.archive(
+                            change_id=args.change_id,
+                            linear_issue_id=metadata["linear"]["issueId"],
+                            gate_status=gate_status,
+                            gate_missing=missing,
+                            comment_allowed=comment["commentAllowed"],
+                            close_allowed=comment["closeAllowed"],
+                            comment_body=comment["body"],
+                        )
+                    ]
+                except RuntimeAdapterError as error:
+                    archive_outcomes = [
+                        self.normalize_adapter_failure(
+                            system="linear",
+                            action_type="comment",
+                            target_id=metadata["linear"]["issueId"],
+                            message=str(error),
+                            code=error.code,
+                            retryable=error.retryable,
+                        )
+                    ]
+        else:
+            adapter = self.runtime_adapter(runtime_mode)
+            try:
+                archive_outcomes = [
+                    outcome.to_dict()
+                    for outcome in adapter.archive(
+                        change_id=args.change_id,
+                        linear_issue_id=metadata["linear"]["issueId"],
+                        gate_status=gate_status,
+                        gate_missing=missing,
+                        comment_allowed=comment["commentAllowed"],
+                        close_allowed=comment["closeAllowed"],
+                        comment_body=comment["body"],
+                    )
+                ]
+            except RuntimeAdapterError as error:
+                archive_outcomes = [
+                    self.normalize_adapter_failure(
+                        system="linear",
+                        action_type="comment",
+                        target_id=metadata["linear"]["issueId"],
+                        message=str(error),
+                        code=error.code,
+                        retryable=error.retryable,
+                    )
+                ]
+
+        if blocked_archive_outcomes:
+            archive_outcomes.extend(blocked_archive_outcomes)
+
+        metadata["adapterOutcomes"]["archive"] = {
+            "gateResult": gate_status,
+            "outcomes": archive_outcomes,
         }
         save_json(path, metadata)
         return {
             "status": gate_status,
             "changeId": args.change_id,
             "metadataPath": str(path.relative_to(self.root)),
+            "runtime": metadata["runtime"],
+            "adapterOutcomes": {
+                "archive": metadata["adapterOutcomes"]["archive"],
+            },
             "archive": metadata["archive"],
         }
 
@@ -338,10 +803,12 @@ def build_parser() -> argparse.ArgumentParser:
     new_parser.add_argument("--title")
     new_parser.add_argument("--change-type")
     new_parser.add_argument("--sdd-state")
+    new_parser.add_argument("--runtime-mode")
 
     status_parser = subparsers.add_parser("status", help="Read or update mapped status")
     status_parser.add_argument("--change-id", required=True)
     status_parser.add_argument("--sdd-state")
+    status_parser.add_argument("--runtime-mode")
 
     log_parser = subparsers.add_parser("log-issue", help="Persist derived issue result")
     log_parser.add_argument("--change-id", required=True)
@@ -355,6 +822,9 @@ def build_parser() -> argparse.ArgumentParser:
     log_parser.add_argument("--proposed-linear-state")
     log_parser.add_argument("--evidence-link", action="append")
     log_parser.add_argument("--operator-notes")
+    log_parser.add_argument("--runtime-mode")
+    log_parser.add_argument("--engram-linkage-failed", action="store_true")
+    log_parser.add_argument("--engram-linkage-error")
 
     archive_parser = subparsers.add_parser("archive", help="Evaluate archive gate and render comment")
     archive_parser.add_argument("--change-id", required=True)
@@ -364,6 +834,7 @@ def build_parser() -> argparse.ArgumentParser:
     archive_parser.add_argument("--business-validation")
     archive_parser.add_argument("--archive-summary")
     archive_parser.add_argument("--follow-up-notes")
+    archive_parser.add_argument("--runtime-mode")
 
     return parser
 

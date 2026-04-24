@@ -17,10 +17,12 @@ Commands-only packaging is the Fase 1 baseline. This command MUST read neutral a
    - `changeId`
    - `linearIssueId`
 3. Accept optional input:
-   - `linearFeatureId`
-   - `title`
-   - `changeType`
-   - `sddState`
+    - `linearFeatureId`
+    - `title`
+    - `changeType`
+    - `sddState`
+    - `runtimeMode` (`stub` default, `live` only with explicit confirmation)
+    - `liveConfirmation` (required phrase: `ALLOW_SDD_LINEAR_LIVE` when `runtimeMode=live`)
 4. Invoke the neutral core instead of reimplementing workflow rules:
 
 ```bash
@@ -30,10 +32,17 @@ python3 ./.ai/workflows/sdd-linear/bin/sdd_linear_core.py new \
   [--linear-feature-id "<linear-feature-id>"] \
   [--title "<title>"] \
   [--change-type "<change-type>"] \
-  [--sdd-state "<sdd-state>"]
+  [--sdd-state "<sdd-state>"] \
+  [--runtime-mode "<stub|live>"]
 ```
 
 5. Return the JSON emitted by the neutral core as the command result.
+
+## Live mode confirmation UX
+
+- Default to `runtimeMode=stub` when the operator does not choose a mode.
+- If the operator requests `live`, require the exact confirmation phrase `ALLOW_SDD_LINEAR_LIVE` before passing `--runtime-mode live` to the core.
+- Do not add workflow logic, prompts, or mutations beyond capturing that explicit confirmation and passing the chosen mode through.
 
 ## Required behavior
 

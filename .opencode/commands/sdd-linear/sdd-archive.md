@@ -15,12 +15,14 @@ Commands-only packaging is the Fase 1 baseline. This command MUST use neutral co
    - If absent, continue and report reduced assistance only.
 2. Require `changeId`.
 3. Accept archive evidence fields:
-   - `prUrl`
-   - `mergeConfirmed`
-   - `qaNotes`
-   - `businessValidation`
-   - `archiveSummary`
-   - `followUpNotes`
+    - `prUrl`
+    - `mergeConfirmed`
+    - `qaNotes`
+    - `businessValidation`
+    - `archiveSummary`
+    - `followUpNotes`
+    - `runtimeMode` (`stub` default)
+    - `liveConfirmation` (required phrase: `ALLOW_SDD_LINEAR_LIVE` when `runtimeMode=live`)
 4. Invoke the neutral core:
 
 ```bash
@@ -31,10 +33,17 @@ python3 ./.ai/workflows/sdd-linear/bin/sdd_linear_core.py archive \
   [--qa-notes "<qa-notes>"] \
   [--business-validation "<business-validation>"] \
   [--archive-summary "<archive-summary>"] \
-  [--follow-up-notes "<follow-up-notes>"]
+  [--follow-up-notes "<follow-up-notes>"] \
+  [--runtime-mode "<stub|live>"]
 ```
 
 5. Return the JSON emitted by the neutral core. When the gate is blocked, surface missing evidence and do not add adapter-side close/comment behavior.
+
+## Live mode confirmation UX
+
+- Default to `runtimeMode=stub` when omitted.
+- If the operator requests `live`, require the exact confirmation phrase `ALLOW_SDD_LINEAR_LIVE` before forwarding `--runtime-mode live`.
+- Surface preflight failures, smoke-policy close blocking, and adapter outcomes exactly as returned by the core.
 
 ## Archive policy
 

@@ -54,6 +54,9 @@
       "type": "integer",
       "minimum": 1
     },
+    "reconciliationRequired": {
+      "type": "boolean"
+    },
     "retry": {
       "type": "object",
       "additionalProperties": false,
@@ -78,6 +81,7 @@
       "enum": [
         "logged",
         "synced",
+        "reconciliation-required",
         "manual-pending"
       ]
     },

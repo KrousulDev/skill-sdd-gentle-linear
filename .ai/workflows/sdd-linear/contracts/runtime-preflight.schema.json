@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://skill-sdd-gentle-linear.local/sdd-linear/contracts/runtime-preflight.schema.json",
+  "title": "SDD Linear Runtime Preflight",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "checks",
+    "allowSideEffects"
+  ],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail"
+      ]
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "status",
+          "detail"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": [
+              "credentials",
+              "connectivity",
+              "targetScope"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "fail"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "allowSideEffects": {
+      "type": "boolean"
+    }
+  }
+}

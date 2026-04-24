@@ -125,6 +125,77 @@
         }
       }
     },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "stub",
+            "live"
+          ]
+        },
+        "preflight": {
+          "anyOf": [
+            {
+              "$ref": "./runtime-preflight.schema.json"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "adapterOutcomes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "statusSync",
+        "logIssue",
+        "archive"
+      ],
+      "properties": {
+        "statusSync": {
+          "type": "array",
+          "items": {
+            "$ref": "./runtime-outcome.schema.json"
+          }
+        },
+        "logIssue": {
+          "type": "array",
+          "items": {
+            "$ref": "./runtime-outcome.schema.json"
+          }
+        },
+        "archive": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "gateResult",
+            "outcomes"
+          ],
+          "properties": {
+            "gateResult": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "outcomes": {
+              "type": "array",
+              "items": {
+                "$ref": "./runtime-outcome.schema.json"
+              }
+            }
+          }
+        }
+      }
+    },
     "derivedIssues": {
       "type": "array",
       "items": {

@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://skill-sdd-gentle-linear.local/sdd-linear/contracts/runtime-outcome.schema.json",
+  "title": "SDD Linear Runtime Outcome",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "system",
+    "requestedAction",
+    "observedResult",
+    "error"
+  ],
+  "properties": {
+    "system": {
+      "type": "string",
+      "enum": [
+        "linear",
+        "engram"
+      ]
+    },
+    "requestedAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "targetId"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "create_issue",
+            "update_state",
+            "comment",
+            "close",
+            "save_observation"
+          ]
+        },
+        "targetId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "observedResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "remoteId",
+        "timestamp"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "success",
+            "failed",
+            "blocked",
+            "skipped"
+          ]
+        },
+        "remoteId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "properties": {
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "PRECHECK_FAILED",
+            "AUTH",
+            "NETWORK",
+            "VALIDATION",
+            "REMOTE",
+            "UNKNOWN",
+            null
+          ]
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retryable": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}
